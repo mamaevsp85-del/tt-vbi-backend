@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import release_db_lock
 from app.core.models import Match, MatchStat, Prediction, PredictionHistory, utcnow
 from app.services import deepseek, elo, parser
 from app.services.api_sport import APISportClient
@@ -233,8 +234,10 @@ async def refresh_sport(db: Session, sport: str, *, line_only: bool = False) -> 
             logger.info("История игроков пропущена: квота %s/%s", snap["used"], snap["budget"])
         else:
             logger.info("Тяну историю %s игроков из %s", cap, len(singles_ids))
+            release_db_lock(db)
             history = await client.player_histories(sport, singles_ids[:cap], page_size=30)
     elif snap["remaining"] >= 2:
+        release_db_lock(db)
         recent = await client.get_matches(
             sport,
             status="finished",
@@ -306,25 +309,28 @@ async def refresh_sport(db: Session, sport: str, *, line_only: bool = False) -> 
         solid.sort(key=lambda pair: (not pair[1]["is_value"], -abs((pair[1].get("prob_a") or 0.5) - 0.5)))
         ordered = thin[: settings.deepseek_thin_cap] + solid[: max(0, ai_cap - min(len(thin), settings.deepseek_thin_cap))]
         ai_ids = {id(payload) for _row, payload in ordered}
+    release_db_lock(db)
     for match_row, payload in built:
-        if id(payload) in ai_ids:
-            if deepseek.needs_research(payload):
-                analysis = await deepseek.research_forecast(payload)
-                if analysis:
-                    deepseek.overlay_forecast(payload, analysis)
-                    analysis["extra_bets"] = payload.get("extra_bets")
-                    payload["ai_analysis"] = analysis
-                    ai_count += 1
-            else:
-                analysis = await deepseek.analyze_match(payload)
-                if analysis:
-                    analysis["extra_bets"] = merge_extra_bets(
-                        payload.get("extra_bets") or [],
-                        analysis.get("extra_bets"),
-                        payload.get("extra_odds") or [],
-                    )
-                    payload["ai_analysis"] = analysis
-                    ai_count += 1
+        if id(payload) not in ai_ids:
+            continue
+        if deepseek.needs_research(payload):
+            analysis = await deepseek.research_forecast(payload)
+            if analysis:
+                deepseek.overlay_forecast(payload, analysis)
+                analysis["extra_bets"] = payload.get("extra_bets")
+                payload["ai_analysis"] = analysis
+                ai_count += 1
+        else:
+            analysis = await deepseek.analyze_match(payload)
+            if analysis:
+                analysis["extra_bets"] = merge_extra_bets(
+                    payload.get("extra_bets") or [],
+                    analysis.get("extra_bets"),
+                    payload.get("extra_odds") or [],
+                )
+                payload["ai_analysis"] = analysis
+                ai_count += 1
+    for match_row, payload in built:
         _save_prediction(db, match_row, payload)
 
     db.commit()
@@ -492,8 +498,10 @@ async def enrich_thin_predictions(db: Session, sport: str, *, limit: int | None 
     if ext_ids:
         for match in db.query(Match).filter(Match.external_id.in_(ext_ids)).all():
             raw_by_id[match.external_id] = match.raw
+    release_db_lock(db)
     done = 0
     skipped = 0
+    pending: list[tuple] = []
     for row in rows:
         payload = prediction_to_dict(row, match_raw=raw_by_id.get(row.external_id))
         ai = row.ai_analysis if isinstance(row.ai_analysis, dict) else {}
@@ -514,8 +522,10 @@ async def enrich_thin_predictions(db: Session, sport: str, *, limit: int | None 
         match_row = db.query(Match).filter(Match.external_id == row.external_id).one_or_none()
         if match_row is None:
             continue
-        _save_prediction(db, match_row, payload)
+        pending.append((match_row, payload))
         done += 1
+    for match_row, payload in pending:
+        _save_prediction(db, match_row, payload)
     db.commit()
     return {
         "status": "success",

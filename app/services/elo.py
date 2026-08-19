@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.models import PlayerElo, utcnow
@@ -9,6 +12,18 @@ K_FACTOR = 32.0
 
 
 def get_or_create_player(db: Session, sport: str, player_id: str, name: str) -> PlayerElo:
+    for attempt in range(5):
+        try:
+            return _get_or_create_player(db, sport, player_id, name)
+        except OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt >= 4:
+                raise
+            db.rollback()
+            time.sleep(0.05 * (attempt + 1))
+    return _get_or_create_player(db, sport, player_id, name)
+
+
+def _get_or_create_player(db: Session, sport: str, player_id: str, name: str) -> PlayerElo:
     row = (
         db.query(PlayerElo)
         .filter(PlayerElo.sport == sport, PlayerElo.player_id == player_id)

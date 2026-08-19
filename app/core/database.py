@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import ROOT_DIR, settings
 
@@ -20,14 +21,32 @@ def _sqlite_url() -> str:
     return url
 
 
-engine = create_engine(
-    _sqlite_url(),
-    echo=False,
-    future=True,
-    connect_args={"check_same_thread": False, "timeout": 30},
-)
+def _configure_sqlite_connection(dbapi_conn, _connection_record) -> None:
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=60000")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+_db_url = _sqlite_url()
+_is_sqlite = _db_url.startswith("sqlite")
+_engine_kwargs: dict = {"echo": False, "future": True}
+if _is_sqlite:
+    _engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 60}
+    _engine_kwargs["poolclass"] = NullPool
+
+engine = create_engine(_db_url, **_engine_kwargs)
+if _is_sqlite:
+    event.listen(engine, "connect", _configure_sqlite_connection)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+
+def release_db_lock(db: Session) -> None:
+    """Commit to end the SQLite transaction and release write locks."""
+    db.commit()
 
 
 def get_db():
