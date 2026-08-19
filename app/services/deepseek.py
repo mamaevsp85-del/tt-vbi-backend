@@ -65,7 +65,7 @@ Edge: {prediction.get('edge')} вердикт: {prediction.get('verdict')}
 }}
 """
     try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
+        async with httpx.AsyncClient(timeout=25.0, trust_env=False) as client:
             response = await client.post(
                 "https://api.deepseek.com/v1/chat/completions",
                 headers={
@@ -232,7 +232,7 @@ async def research_forecast(prediction: dict[str, Any]) -> dict[str, Any] | None
 prob_a — вероятность победы игрока A, от 0.18 до 0.82.
 """
     try:
-        async with httpx.AsyncClient(timeout=40.0) as client:
+        async with httpx.AsyncClient(timeout=40.0, trust_env=False) as client:
             response = await client.post(
                 "https://api.deepseek.com/v1/chat/completions",
                 headers={

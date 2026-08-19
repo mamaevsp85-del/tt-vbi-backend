@@ -110,6 +110,25 @@ def _rotate_unlocked(data: dict[str, Any]) -> bool:
     return True
 
 
+def rotate_invalid_key() -> bool:
+    """Skip key that returned 401 Unauthorized and try the next one."""
+    with _LOCK:
+        data = _load()
+        keys = key_list()
+        idx = int(data.get("key_index") or 0)
+        if idx + 1 >= len(keys):
+            data["exhausted"] = True
+            _save(data)
+            return False
+        data["key_index"] = idx + 1
+        data["used"] = 0
+        data["exhausted"] = False
+        data["rotated_at"] = _now().isoformat()
+        _save(data)
+        logger.warning("API-Sport: ключ %s недействителен (401), пробуем %s/%s", idx + 1, idx + 2, len(keys))
+        return True
+
+
 def active_key() -> str:
     keys = key_list()
     if not keys:

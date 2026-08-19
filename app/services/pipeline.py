@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -184,6 +185,10 @@ def _ingest_finished_list(db: Session, sport: str, matches: list[dict]) -> int:
 async def refresh_sport(db: Session, sport: str, *, line_only: bool = False) -> dict:
     client = APISportClient()
     kr_today = datetime.now(timezone(timedelta(hours=7))).date()
+    on_render = bool(os.environ.get("RENDER"))
+    if on_render and not line_only:
+        line_only = True
+        logger.info("Render: быстрый refresh (только линия)")
     upcoming, line_stats = await client.fetch_line(
         sport,
         date_from=kr_today.isoformat(),

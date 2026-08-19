@@ -124,23 +124,36 @@ class APISportClient:
         url = f"{self.base_url}/v2/{slug}/matches"
 
         async def _do(http: httpx.AsyncClient) -> tuple[list[dict[str, Any]], int | None]:
-            if not skip_quota:
-                quota.acquire(1)
-            response = await http.get(url, params=params, headers=self._headers())
-            if response.status_code == 429:
-                rotated = quota.mark_exhausted()
-                if rotated:
-                    logger.warning("API-Sport %s 429: повтор на запасном ключе", sport)
-                    if not skip_quota:
-                        quota.acquire(1)
-                    response = await http.get(url, params=params, headers=self._headers())
+            attempts = max(1, len(quota.key_list()))
+            response = None
+            for attempt in range(attempts):
+                if not skip_quota:
+                    quota.acquire(1)
+                response = await http.get(url, params=params, headers=self._headers())
                 if response.status_code == 429:
-                    quota.mark_exhausted()
-                    logger.error("API-Sport %s 429: все ключи упёрлись в дневной лимит", sport)
-                    raise APISportError("API-Sport вернул 429")
-            if response.status_code != 200:
-                logger.error("API-Sport %s %s: %s", sport, response.status_code, response.text[:300])
-                raise APISportError(f"API-Sport вернул {response.status_code}")
+                    rotated = quota.mark_exhausted()
+                    if rotated:
+                        logger.warning("API-Sport %s 429: ключ %s, пробуем следующий", sport, attempt + 1)
+                        continue
+                    logger.error("API-Sport %s 429: лимит на всех ключах", sport)
+                    raise APISportError(
+                        "Дневной лимит API-Sport исчерпан на всех ключах. Попробуйте завтра."
+                    )
+                if response.status_code == 401:
+                    if not skip_quota:
+                        quota.refund(1)
+                    if quota.rotate_invalid_key():
+                        logger.warning("API-Sport %s 401: неверный ключ %s, пробуем следующий", sport, attempt + 1)
+                        continue
+                    raise APISportError(
+                        "Неверный API_SPORT_KEY (401). Проверьте ключи: backup-ключ может быть недействителен."
+                    )
+                break
+            if response is None or response.status_code != 200:
+                code = response.status_code if response is not None else 0
+                body = response.text[:300] if response is not None else ""
+                logger.error("API-Sport %s %s: %s", sport, code, body)
+                raise APISportError(f"API-Sport вернул {code}")
             payload = response.json()
             matches = payload.get("matches")
             if matches is None:
@@ -196,22 +209,31 @@ class APISportClient:
             params["with_bk_odds"] = "true"
 
         async def _do(http: httpx.AsyncClient) -> dict[str, Any] | None:
-            if not skip_quota:
-                quota.acquire(1)
-            response = await http.get(url, params=params, headers=self._headers())
-            if response.status_code == 404:
-                return None
-            if response.status_code == 429:
-                rotated = quota.mark_exhausted()
-                if rotated:
+            attempts = max(1, len(quota.key_list()))
+            response = None
+            for attempt in range(attempts):
+                if not skip_quota:
+                    quota.acquire(1)
+                response = await http.get(url, params=params, headers=self._headers())
+                if response.status_code == 404:
                     if not skip_quota:
-                        quota.acquire(1)
-                    response = await http.get(url, params=params, headers=self._headers())
+                        quota.refund(1)
+                    return None
                 if response.status_code == 429:
-                    quota.mark_exhausted()
-                    raise APISportError("API-Sport вернул 429")
-            if response.status_code != 200:
-                raise APISportError(f"API-Sport вернул {response.status_code}")
+                    if quota.mark_exhausted():
+                        logger.warning("API-Sport match 429: ключ %s, следующий", attempt + 1)
+                        continue
+                    raise APISportError("Дневной лимит API-Sport исчерпан на всех ключах.")
+                if response.status_code == 401:
+                    if not skip_quota:
+                        quota.refund(1)
+                    if quota.rotate_invalid_key():
+                        continue
+                    raise APISportError("Неверный API_SPORT_KEY (401).")
+                break
+            if response is None or response.status_code != 200:
+                code = response.status_code if response is not None else 0
+                raise APISportError(f"API-Sport вернул {code}")
             payload = response.json()
             # API иногда отдаёт объект матча напрямую, иногда в ключе data/match
             if isinstance(payload, dict) and "match" in payload:
@@ -316,7 +338,7 @@ class APISportClient:
             return []
 
         out: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=30.0) as http:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as http:
             for pid in unique:
                 try:
                     chunk = await self.get_matches(

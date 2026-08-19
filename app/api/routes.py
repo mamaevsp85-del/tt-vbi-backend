@@ -53,12 +53,16 @@ class SettingsUpdate(BaseModel):
 
 
 @router.post("/refresh")
-async def refresh(sport: str = Query("table_tennis"), db: Session = Depends(get_db)):
+async def refresh(
+    sport: str = Query("table_tennis"),
+    fast: bool = Query(False, description="Только линия с кэфами, без истории игроков и DeepSeek"),
+    db: Session = Depends(get_db),
+):
     if sport not in {"table_tennis", "tennis"}:
         raise HTTPException(status_code=400, detail="sport должен быть table_tennis или tennis")
     try:
         quota.check_refresh(sport)
-        result = await refresh_sport(db, sport)
+        result = await refresh_sport(db, sport, line_only=fast)
         quota.mark_refresh(sport)
         result["quota"] = quota.snapshot()
         return result
