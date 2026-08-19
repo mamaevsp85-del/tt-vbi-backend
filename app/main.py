@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,14 +11,15 @@ from app.core.config import ROOT_DIR, settings
 from app.core.database import init_db
 from app.services import quota
 
+(ROOT_DIR / "data").mkdir(parents=True, exist_ok=True)
 (ROOT_DIR / "logs").mkdir(parents=True, exist_ok=True)
+_log_handlers: list[logging.Handler] = [logging.StreamHandler()]
+if not os.environ.get("RENDER"):
+    _log_handlers.append(logging.FileHandler(ROOT_DIR / "logs" / "app.log", encoding="utf-8"))
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(ROOT_DIR / "logs" / "app.log", encoding="utf-8"),
-    ],
+    handlers=_log_handlers,
 )
 
 app = FastAPI(title=settings.app_name, version="35.1.0")
