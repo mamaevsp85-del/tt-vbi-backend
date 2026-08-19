@@ -1,0 +1,10 @@
+﻿venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+.env.for-render
+data/*.db
+data/*.db-journal
+logs/*.log
