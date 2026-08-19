@@ -23,9 +23,18 @@ logging.basicConfig(
 )
 
 app = FastAPI(title=settings.app_name, version="35.1.0")
+_cors_origins = settings.cors_origin_list or ["http://localhost:8080"]
+if os.environ.get("RENDER"):
+    _site_origins = [
+        "https://botsport.xo.je",
+        "https://www.botsport.xo.je",
+        "http://botsport.xo.je",
+        "http://www.botsport.xo.je",
+    ]
+    _cors_origins = list(dict.fromkeys([*_cors_origins, *_site_origins, "*"]))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list or ["http://localhost:8080"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
