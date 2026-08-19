@@ -5,5 +5,3 @@ pydantic==2.10.5
 pydantic-settings==2.7.1
 sqlalchemy==2.0.36
 python-dotenv==1.0.1
-cursor-sdk
-socksio
